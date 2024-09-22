@@ -5,9 +5,10 @@ import base64
 from cryptography.fernet import Fernet
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTextEdit, QAction, QMessageBox, 
                              QTreeView, QFileSystemModel, QVBoxLayout, QWidget, 
-                             QSplitter, QInputDialog, QLineEdit, QPushButton)
+                             QSplitter, QInputDialog, QLineEdit, QPushButton, QMenu, QColorDialog)
 from PyQt5.QtCore import QPropertyAnimation, Qt, QDateTime, QEasingCurve
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtGui import QKeySequence, QColor, QTextCursor, QTextCharFormat, QFont
+
 
 class JournalApp(QMainWindow):
     def __init__(self):
@@ -165,6 +166,10 @@ class JournalApp(QMainWindow):
         toggle_nav_button.clicked.connect(self.toggle_navbar)
         self.menuBar().setCornerWidget(toggle_nav_button, Qt.TopLeftCorner)
 
+        # Right-click context menu for text formatting
+        self.text_edit.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.text_edit.customContextMenuRequested.connect(self.show_context_menu)
+
     def create_tree_view(self):
         # Tree navigation
         self.tree_view = QTreeView(self)
@@ -200,51 +205,100 @@ class JournalApp(QMainWindow):
         if not os.path.exists(current_date_dir):
             os.makedirs(current_date_dir)
 
-        self.current_note_path = os.path.join(current_date_dir, 'journal.txt')
+        self.current_note_path = os.path.join(current_date_dir, "journal.txt")
         if os.path.exists(self.current_note_path):
             with open(self.current_note_path, 'r') as file:
-                self.text_edit.setText(file.read())
-                self.text_edit.setReadOnly(True)
+                self.text_edit.setPlainText(file.read())
         else:
             self.text_edit.clear()
-            self.text_edit.setReadOnly(False)
-
-    def load_selected_note(self, index):
-        """Load selected journal note from the tree view"""
-        model = self.tree_view.model()
-        file_path = model.filePath(index)
-        if os.path.isfile(file_path) and file_path.endswith('.txt'):
-            with open(file_path, 'r') as file:
-                self.text_edit.setText(file.read())
-                self.text_edit.setReadOnly(True)
-            self.current_note_path = file_path
 
     def save_note(self):
-        if self.current_note_path:
-            with open(self.current_note_path, 'w') as file:
-                file.write(self.text_edit.toPlainText())
+        # Save the current note and make the file read-only
+        with open(self.current_note_path, 'w') as file:
+            file.write(self.text_edit.toPlainText())
+        os.chmod(self.current_note_path, 0o444)  # Make file read-only
+        QMessageBox.information(self, 'Saved', 'Your journal has been saved and is now read-only.')
+
+    def load_selected_note(self, index):
+        file_path = self.tree_view.model().filePath(index)
+        if file_path.endswith('.txt'):
+            with open(file_path, 'r') as file:
+                self.text_edit.setPlainText(file.read())
             self.text_edit.setReadOnly(True)
-            QMessageBox.information(self, 'Saved', "Journal entry saved and locked.")
 
     def toggle_navbar(self):
-        """Animate the navigation bar to show or hide with a sliding effect."""
-        current_width = self.splitter.sizes()[0]
-        target_width = 0 if current_width > 0 else 200
+        if self.splitter.sizes()[0] == 0:
+            self.animate_navbar(200)
+        else:
+            self.animate_navbar(0)
 
+    def animate_navbar(self, width):
         animation = QPropertyAnimation(self.splitter, b'sizes')
-        animation.setDuration(500)
+        animation.setDuration(300)
         animation.setEasingCurve(QEasingCurve.InOutQuad)
-        animation.setStartValue([current_width, self.splitter.sizes()[1]])
-        animation.setEndValue([target_width, self.splitter.sizes()[1]])
+        animation.setStartValue(self.splitter.sizes())
+        animation.setEndValue([width, 800])
         animation.start()
 
+    def show_context_menu(self, pos):
+        """Create and display the custom context menu with formatting options."""
+        context_menu = QMenu(self)
+
+        # Bold Text Option
+        bold_action = QAction('Bold', self)
+        bold_action.triggered.connect(self.toggle_bold)
+        context_menu.addAction(bold_action)
+
+        # Text Alignment Options
+        align_left_action = QAction('Align Left', self)
+        align_left_action.triggered.connect(lambda: self.set_alignment(Qt.AlignLeft))
+        context_menu.addAction(align_left_action)
+
+        align_center_action = QAction('Align Center', self)
+        align_center_action.triggered.connect(lambda: self.set_alignment(Qt.AlignCenter))
+        context_menu.addAction(align_center_action)
+
+        align_right_action = QAction('Align Right', self)
+        align_right_action.triggered.connect(lambda: self.set_alignment(Qt.AlignRight))
+        context_menu.addAction(align_right_action)
+
+        # Text Color Option
+        color_action = QAction('Text Color', self)
+        color_action.triggered.connect(self.change_text_color)
+        context_menu.addAction(color_action)
+
+        # Show the menu at the requested position
+        context_menu.exec_(self.text_edit.viewport().mapToGlobal(pos))
+
+    def toggle_bold(self):
+        """Toggle bold formatting on the selected text."""
+        cursor = self.text_edit.textCursor()
+        if cursor.hasSelection():
+            fmt = QTextCharFormat()
+            fmt.setFontWeight(QFont.Bold if cursor.charFormat().fontWeight() != QFont.Bold else QFont.Normal)
+            cursor.mergeCharFormat(fmt)
+
+    def set_alignment(self, alignment):
+        """Set the alignment of the selected text or current paragraph."""
+        self.text_edit.setAlignment(alignment)
+
+    def change_text_color(self):
+        """Open a color dialog to change the selected text color."""
+        cursor = self.text_edit.textCursor()
+        if cursor.hasSelection():
+            color = QColorDialog.getColor()
+            if color.isValid():
+                fmt = QTextCharFormat()
+                fmt.setForeground(color)
+                cursor.mergeCharFormat(fmt)
+
     def closeEvent(self, event):
-        # Encrypt files before closing the app
+        """Encrypt journal files and exit"""
         self.encrypt_journal_files()
         event.accept()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    main_window = JournalApp()
+    journal = JournalApp()
+    journal.show()
     sys.exit(app.exec_())
-
